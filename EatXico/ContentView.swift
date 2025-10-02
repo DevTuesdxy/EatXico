@@ -12,6 +12,8 @@ struct ContentView: View {
     let colorIdioma = Color(red: 56/255, green: 142/255, blue: 60/255)
     let colorContorno = Color(red: 230/255, green: 238/255, blue: 30/255)
     let colorDesc = Color(red: 97/255, green: 97/255, blue: 97/255)
+    // Reemplaza con el PostScript name de tu fuente (no el nombre del archivo)
+    // let appTitleFontName = "Day Sans Black"
     
     @State private var selectedLanguage: String? = nil
 
@@ -36,20 +38,25 @@ struct ContentView: View {
                 // Logo de la app
                 VStack(spacing: 12) {
                     ZStack {
-                        Circle()
-                            .fill(.ultraThinMaterial)
-                            .frame(width: 110, height: 110)
-                            .shadow(color: .black.opacity(0.06), radius: 12, x: 0, y: 6)
-                        Image(systemName: "camera.fill")
-                            .font(.system(size: 44, weight: .semibold))
-                            .foregroundStyle(.tint)
-                            .foregroundStyle(colorVerde)
+                        Image("jalapeño")
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 132)
+                            //.rotationEffect(.degrees(8))
+                            .offset(x: 4, y: 0) // mueve la imagen dentro del circulo
                     }
-                    Text("EatXico")
+                    .frame(width: 120, height: 120)
+                    .clipShape(Circle())
+                    .overlay(
+                        Circle().stroke(colorVerde.opacity(0.6), lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.1), radius: 6, x: 0, y: 3)
+                    
+                    Text("FoodLens")
+               
                         .font(.title3)
                         .foregroundStyle(colorVerde)
                         .fontWeight(.semibold)
-                        .foregroundStyle(.primary)
                         .accessibilityAddTraits(.isHeader)
                 
                     Text("Descubre la gastronomia Mexicana")
@@ -187,4 +194,3 @@ struct ContentView: View {
 #Preview {
     ContentView()
 }
-
