@@ -11,6 +11,11 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		ED8412192E8E264E00E16CE2 /* Fonts */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Fonts;
+			sourceTree = "<group>";
+		};
 		EDE2C26B2E8C40C5001B24E2 /* EatXico */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = EatXico;
@@ -32,6 +37,7 @@
 		EDE2C2602E8C40C5001B24E2 = {
 			isa = PBXGroup;
 			children = (
+				ED8412192E8E264E00E16CE2 /* Fonts */,
 				EDE2C26B2E8C40C5001B24E2 /* EatXico */,
 				EDE2C26A2E8C40C5001B24E2 /* Products */,
 			);
@@ -61,6 +67,7 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
+				ED8412192E8E264E00E16CE2 /* Fonts */,
 				EDE2C26B2E8C40C5001B24E2 /* EatXico */,
 			);
 			name = EatXico;
