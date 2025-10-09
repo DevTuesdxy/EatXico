@@ -17,112 +17,172 @@ class CameraViewModel: NSObject, ObservableObject {
     let session = AVCaptureSession()
     private let photoOutput = AVCapturePhotoOutput()
     
-    @Published var resultText: String = "Apunta y presiona el botón para capturar"
+    private var classifierModel: VNCoreMLModel?
+    private var objectDetectorModel: VNCoreMLModel?
+    private let chatViewModel = ChatViewModel()
     
-    private var visionModel: VNCoreMLModel?
-    
-    
-    //constructor: pasamos la base de avfundation para manejo de camara y las otras 2 funciones
+    @Published var analysisStatus: String = "Apunta y presiona para capturar"
+    @Published var isAnalyzing: Bool = false
+    @Published var analysisResult: AnalysisResult?
+    @Published var analysisError: String?
+
     override init() {
         super.init()
-        setupVisionModel()
+        loadModels()
         configureSession()
     }
     
-    //se configura y se carga el modelo de ia
-    private func setupVisionModel() {
+    private func loadModels() {
         do {
-            let configuration = MLModelConfiguration()
-            let coreMLModel = try MyImageFoodClassifier1(configuration: configuration)
-            self.visionModel = try VNCoreMLModel(for: coreMLModel.model)
-        } catch {
-            resultText = "Error: No se pudo cargar el modelo."
-        }
-    }
-    
-    //configura la sesion y la entrada de la camara
-    func configureSession() {
-        guard let videoDevice = AVCaptureDevice.default(for: .video) else {
-            resultText = "Error: No se encontró la cámara."
-            return
-        }
-        
-        session.beginConfiguration()
-        
-        do {
-            let input = try AVCaptureDeviceInput(device: videoDevice)
-            if session.canAddInput(input) { session.addInput(input) }
-
-            if session.canAddOutput(photoOutput) { session.addOutput(photoOutput) }
+            let config = MLModelConfiguration()
+            let sharedModel = try MyObjectDetector_1_Iteration_25000(configuration: config)
+            self.classifierModel = try VNCoreMLModel(for: sharedModel.model)
+            self.objectDetectorModel = try VNCoreMLModel(for: sharedModel.model)
             
         } catch {
-            resultText = "Error al configurar la cámara."
-        }
-        
-        session.commitConfiguration()
-    }
-    
-    //enciende la sesion si esta apagada
-    func startRunning() {
-        let session = self.session
-        guard !session.isRunning else { return }
-        DispatchQueue.global(qos: .userInitiated).async {
-            session.startRunning()
+            analysisStatus = "Error: No se pudieron cargar los modelos de IA."
+            analysisError = error.localizedDescription
         }
     }
     
-    //apaga la sesion si esta encendida
-    func stopRunning() {
-        let session = self.session
-        guard session.isRunning else { return }
-        DispatchQueue.global(qos: .userInitiated).async {
-            session.stopRunning()
-        }
-    }
-    
-    //da la instuccion directa de tomar la foto con las configuraciones por defecto, y el resultado lo guarda lo aqui mismo(CameraViewModel)
     func takePhoto() {
-        self.resultText = "Capturando..."
+        guard !isAnalyzing else { return }
+        analysisStatus = "Capturando foto..."
+        isAnalyzing = true
         let settings = AVCapturePhotoSettings()
         photoOutput.capturePhoto(with: settings, delegate: self)
     }
     
-    //Analizar  la imagen que se tomo y le da formato al texto que la ia responde
-    private func classify(image: UIImage) {
-        guard let visionModel = self.visionModel else { return }
-        
-        self.resultText = "Analizando..."
-        
-        let request = VNCoreMLRequest(model: visionModel) { [weak self] request, error in
-            guard let self = self else { return }
-            
-            if let results = request.results as? [VNClassificationObservation],
-               let topResult = results.first {
-                let objectName = topResult.identifier.components(separatedBy: ",")[0]
-                let confidence = Int(topResult.confidence * 100)
+    private func analyze(image: UIImage) {
+        Task {
+            do {
+                analysisStatus = "Identificando platillo..."
+                let dishIdentifier = try await classifyDish(from: image)
                 
-                self.resultText = "\(objectName.capitalized) (\(confidence)%)"
-            } else {
-                self.resultText = "No se pudo identificar."
+                analysisStatus = "Consultando receta base..."
+                let foodInfo = try await chatViewModel.getInfo(for: dishIdentifier)
+                
+                analysisStatus = "Detectando ingredientes visibles..."
+                let detectedIngredients = try await detectVisibleIngredients(from: image)
+                
+                analysisStatus = "Combinando resultados..."
+                var combined = Set(foodInfo.ingredientes)
+                detectedIngredients.forEach { combined.insert($0.capitalized) }
+                
+                self.analysisResult = AnalysisResult(
+                    dishName: foodInfo.nombre,
+                    capturedImage: image,
+                    combinedIngredients: Array(combined).sorted()
+                )
+                
+                self.isAnalyzing = false
+                self.analysisStatus = "¡Análisis completo!"
+                
+            } catch {
+                self.analysisError = error.localizedDescription
+                self.isAnalyzing = false
+                self.analysisStatus = "Error en el análisis. Intenta de nuevo."
             }
         }
-        
-        guard let ciImage = CIImage(image: image) else { return }
-        DispatchQueue.global(qos: .userInitiated).async {
-            try? VNImageRequestHandler(ciImage: ciImage, options: [:]).perform([request])
+    }
+    
+    private func classifyDish(from image: UIImage) async throws -> String {
+        guard let classifierModel = self.classifierModel else { throw URLError(.badURL) }
+        return try await performVisionRequest(for: classifierModel, on: image) { request in
+            guard let results = request.results as? [VNClassificationObservation], let topResult = results.first else {
+                throw NSError(domain: "", code: 0, userInfo: [NSLocalizedDescriptionKey: "No se pudo clasificar el platillo."])
+            }
+            return topResult.identifier
+        }
+    }
+    
+    private func detectVisibleIngredients(from image: UIImage) async throws -> [String] {
+        guard let objectDetectorModel = self.objectDetectorModel else { throw URLError(.badURL) }
+        return try await performVisionRequest(for: objectDetectorModel, on: image) { request in
+            guard let results = request.results as? [VNRecognizedObjectObservation] else { return [] }
+            return results.compactMap { observation in observation.labels.first?.identifier }
+        }
+    }
+    
+    private func performVisionRequest<T>(for model: VNCoreMLModel, on image: UIImage, handler: @escaping (VNRequest) throws -> T) async throws -> T {
+        return try await withCheckedThrowingContinuation { continuation in
+            let request = VNCoreMLRequest(model: model) { request, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                do {
+                    let result = try handler(request)
+                    continuation.resume(returning: result)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+            guard let ciImage = CIImage(image: image) else {
+                continuation.resume(throwing: NSError(domain: "", code: 0, userInfo: [NSLocalizedDescriptionKey: "Error al convertir imagen."]))
+                return
+            }
+            DispatchQueue.global().async {
+                do {
+                    let orientation = CGImagePropertyOrientation(image.imageOrientation)
+                    try VNImageRequestHandler(ciImage: ciImage, orientation: orientation).perform([request])
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+    
+    func configureSession() {
+        guard let videoDevice = AVCaptureDevice.default(for: .video) else {
+            analysisStatus = "Error: No se encontró la cámara."
+            return
+        }
+        session.beginConfiguration()
+        do {
+            let input = try AVCaptureDeviceInput(device: videoDevice)
+            if session.canAddInput(input) { session.addInput(input) }
+            if session.canAddOutput(photoOutput) { session.addOutput(photoOutput) }
+        } catch {
+            analysisStatus = "Error al configurar la cámara."
+            analysisError = error.localizedDescription
+        }
+        session.commitConfiguration()
+    }
+    
+    func startRunning() {
+        Task { @MainActor in
+            guard !session.isRunning else { return }
+            session.startRunning()
+        }
+    }
+    
+    func stopRunning() {
+        Task { @MainActor in
+            guard session.isRunning else { return }
+            session.stopRunning()
         }
     }
 }
 
 extension CameraViewModel: AVCapturePhotoCaptureDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        guard let imageData = photo.fileDataRepresentation(),
-              let image = UIImage(data: imageData) else {
-            self.resultText = "Error: No se pudo procesar la foto."
+        guard let imageData = photo.fileDataRepresentation(), let image = UIImage(data: imageData) else {
+            self.analysisStatus = "Error: No se pudo procesar la foto."
+            self.isAnalyzing = false
             return
         }
-        self.classify(image: image)
+        analyze(image: image)
     }
 }
 
-
+private extension CGImagePropertyOrientation {
+    init(_ uiOrientation: UIImage.Orientation) {
+        switch uiOrientation {
+        case .up: self = .up; case .down: self = .down; case .left: self = .left; case .right: self = .right
+        case .upMirrored: self = .upMirrored; case .downMirrored: self = .downMirrored
+        case .leftMirrored: self = .leftMirrored; case .rightMirrored: self = .rightMirrored
+        @unknown default: self = .up
+        }
+    }
+}
